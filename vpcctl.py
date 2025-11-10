@@ -73,8 +73,11 @@ def get_namespace_name(vpc_name, subnet_name):
     return f"ns-{vpc_name}-{subnet_name}"
 
 def get_veth_pair_names(vpc_name, subnet_name):
-    ns_side = f"veth-{subnet_name}-ns"
-    br_side = f"veth-{subnet_name}-br"
+    """Gets the names for the veth pair."""
+    # Use both names to create a unique ID
+    unique_id = f"{vpc_name}-{subnet_name}"
+    ns_side = f"veth-{unique_id}-ns"
+    br_side = f"veth-{unique_id}-br"
     return (ns_side, br_side)
 
 def get_gateway_ip(cidr):
