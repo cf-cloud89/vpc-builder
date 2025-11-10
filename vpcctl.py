@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-vpcctl - A tool to build and manage Virtual Private Clouds (VPCs) on Linux hosts.
+vpcctl - A tool to build and manage Virtual Private Clouds (VPCs) on a Linux host.
 """
 
 import argparse
@@ -186,7 +186,6 @@ def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None)
 
 
 # Firewall / Security Group Function
-
 def apply_rules(policy_file):
     """
     Applies firewall rules to a subnet from a JSON file.
@@ -209,7 +208,7 @@ def apply_rules(policy_file):
     try:
         vpc_name = policy['vpc']
         subnet_name = policy['subnet']
-        ingress_rules = policy.get('ingress', []) # Default to empty list if not present
+        ingress_rules = policy.get('ingress', [])
     except KeyError as e:
         log.error(f"Invalid policy file: Missing required key: {e}")
         log.error("Policy must contain 'vpc', 'subnet', and 'ingress' keys.")
@@ -218,33 +217,29 @@ def apply_rules(policy_file):
     namespace_name = get_namespace_name(vpc_name, subnet_name)
     log.info(f"   Targeting namespace: {namespace_name}")
 
-    # First, flush old rules (optional, but good for idempotency)
-    # It won't flush the default rules (lo, ESTABLISHED)
-    # A better way is to create a custom chain, but this is simpler.
-    
-    # To make this idempotent, it needs to check if the rule already exists, which is very complex.
-    # For this project, let's assume rules are applied once.
-
     for rule in ingress_rules:
         try:
             port = rule['port']
             protocol = rule['protocol'].lower()
-            action = rule['action'].upper() # e.g., "ACCEPT" or "DENY"
+            action_json = rule['action'].upper() # Get "ACCEPT" or "DENY"
             
-            if action not in ["ACCEPT", "DENY"]:
-                log.warning(f"   Invalid action '{action}'. Skipping rule.")
+            # Translate JSON action to a valid iptables 'target'
+            if action_json == "ACCEPT":
+                iptables_target = "ACCEPT"
+            elif action_json == "DENY":
+                iptables_target = "DROP"
+            else:
+                log.warning(f"   Invalid action '{action_json}'. Must be 'ACCEPT' or 'DENY'. Skipping.")
                 continue
 
-            log.info(f"   Applying rule: {action} {protocol} port {port}")
+            log.info(f"   Applying rule: {action_json} (as {iptables_target}) {protocol} port {port}")
             
-            # We insert rules at the top of the INPUT chain
-            # This makes sure they are evaluated before the final DROP
             run_cmd([
                 "ip", "netns", "exec", namespace_name,
                 "iptables", "-I", "INPUT", "3", # Insert after lo and ESTABLISHED
                 "-p", protocol,
                 "--dport", str(port),
-                "-j", action
+                "-j", iptables_target
             ])
         
         except KeyError as e:
