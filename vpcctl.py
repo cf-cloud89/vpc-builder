@@ -11,6 +11,7 @@ import logging
 import os
 import ipaddress
 import re
+import json
 
 # Set up logging to print clearly
 logging.basicConfig(
@@ -65,7 +66,6 @@ def run_cmd(cmd_list, check=True, capture=True):
 
 
 # Naming and Resource Function
-
 def get_bridge_name(vpc_name):
     return f"br-{vpc_name}"
 
@@ -102,9 +102,8 @@ def find_subnets_for_vpc(vpc_name):
     return subnets
 
 
-# create_vpc Function
+# Core VPC Function
 def create_vpc(vpc_name, cidr_block):
-    """Creates a new VPC bridge and isolation rules."""
     log.info(f"--- Creating VPC '{vpc_name}' ({cidr_block}) ---")
     bridge_name = get_bridge_name(vpc_name)
     stdout, _ = run_cmd(["ip", "-br", "link", "show", "dev", bridge_name], check=False, capture=True)
@@ -128,7 +127,7 @@ def create_vpc(vpc_name, cidr_block):
         log.error("Cleanup attempted. Please check system state.")
         sys.exit(1)
 
-# create_subnet Function
+# Subnet & Routing Function
 def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None):
     log.info(f"--- Creating Subnet '{subnet_name}' in VPC '{vpc_name}' ({cidr}) ---")
     if subnet_type == "public" and not internet_iface:
@@ -161,6 +160,16 @@ def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None)
         run_cmd(["ip", "netns", "exec", namespace_name, "ip", "addr", "add", interface_ip_with_prefix, "dev", veth_ns])
         run_cmd(["ip", "netns", "exec", namespace_name, "ip", "link", "set", "dev", veth_ns, "up"])
         run_cmd(["ip", "netns", "exec", namespace_name, "ip", "route", "add", "default", "via", gateway_ip])
+        
+        # Add default stateful rules to namespace
+        log.info("   Applying default stateful firewall rules to namespace...")
+        # 1. Set default policy to DROP all incoming traffic
+        run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-P", "INPUT", "DROP"])
+        # 2. Allow loopback traffic (important for many services)
+        run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"])
+        # 3. Allow established connections (makes firewall stateful)
+        run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-A", "INPUT", "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"])
+
         if subnet_type == "public":
             log.info(f"   Configuring as 'public' subnet using interface '{internet_iface}'")
             run_cmd(["iptables", "-t", "nat", "-I", "POSTROUTING", "-s", cidr, "-o", internet_iface, "-j", "MASQUERADE"])
@@ -176,7 +185,77 @@ def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None)
         sys.exit(1)
 
 
-# Cleanup Functions
+# Firewall / Security Group Function
+
+def apply_rules(policy_file):
+    """
+    Applies firewall rules to a subnet from a JSON file.
+    """
+    log.info(f"--- Applying Security Group rules from '{policy_file}' ---")
+    
+    try:
+        with open(policy_file, 'r') as f:
+            policy = json.load(f)
+    except FileNotFoundError:
+        log.error(f"Policy file not found: {policy_file}")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        log.error(f"Could not parse policy file. Invalid JSON: {policy_file}")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Failed to read policy file: {e}")
+        sys.exit(1)
+
+    try:
+        vpc_name = policy['vpc']
+        subnet_name = policy['subnet']
+        ingress_rules = policy.get('ingress', []) # Default to empty list if not present
+    except KeyError as e:
+        log.error(f"Invalid policy file: Missing required key: {e}")
+        log.error("Policy must contain 'vpc', 'subnet', and 'ingress' keys.")
+        sys.exit(1)
+
+    namespace_name = get_namespace_name(vpc_name, subnet_name)
+    log.info(f"   Targeting namespace: {namespace_name}")
+
+    # First, flush old rules (optional, but good for idempotency)
+    # It won't flush the default rules (lo, ESTABLISHED)
+    # A better way is to create a custom chain, but this is simpler.
+    
+    # To make this idempotent, it needs to check if the rule already exists, which is very complex.
+    # For this project, let's assume rules are applied once.
+
+    for rule in ingress_rules:
+        try:
+            port = rule['port']
+            protocol = rule['protocol'].lower()
+            action = rule['action'].upper() # e.g., "ACCEPT" or "DENY"
+            
+            if action not in ["ACCEPT", "DENY"]:
+                log.warning(f"   Invalid action '{action}'. Skipping rule.")
+                continue
+
+            log.info(f"   Applying rule: {action} {protocol} port {port}")
+            
+            # We insert rules at the top of the INPUT chain
+            # This makes sure they are evaluated before the final DROP
+            run_cmd([
+                "ip", "netns", "exec", namespace_name,
+                "iptables", "-I", "INPUT", "3", # Insert after lo and ESTABLISHED
+                "-p", protocol,
+                "--dport", str(port),
+                "-j", action
+            ])
+        
+        except KeyError as e:
+            log.warning(f"   Skipping invalid rule, missing key: {e}. Rule: {rule}")
+        except Exception as e:
+            log.error(f"   Failed to apply rule: {rule}. Error: {e}")
+
+    log.info(f" Successfully applied rules to '{subnet_name}'.")
+
+
+# Cleanup Function
 def delete_subnet(vpc_name, subnet_name, subnet_cidr, internet_iface=None):
     log.info(f"--- Deleting Subnet '{subnet_name}' from VPC '{vpc_name}' ---")
     bridge_name = get_bridge_name(vpc_name)
@@ -214,85 +293,40 @@ def delete_vpc(vpc_name, internet_iface=None):
     run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_name, "-o", bridge_name, "-j", "ACCEPT"], check=False)
     run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_name, "!", "-o", bridge_name, "-j", "DROP"], check=False)
     run_cmd(["iptables", "-D", "FORWARD", "-o", bridge_name, "!", "-i", bridge_name, "-j", "DROP"], check=False)
-    
-    # Also delete any peering rules
     log.info(f"   Cleaning up any orphaned peering rules for {bridge_name}...")
     delete_all_peering_for_vpc(bridge_name)
-
     run_cmd(["ip", "link", "set", "dev", bridge_name, "down"], check=False)
     run_cmd(["ip", "link", "delete", "dev", bridge_name, "type", "bridge"], check=False)
     log.info(f" Successfully deleted VPC '{vpc_name}'.")
 
-# peer_vpc Function
-
+# Peering Function
 def peer_vpc(vpc_a_name, vpc_b_name):
-    """
-    Establishes peering between two VPCs by adding iptables rules.
-    """
     log.info(f"--- Establishing Peering between '{vpc_a_name}' and '{vpc_b_name}' ---")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
-
     try:
-        # 1. Insert ACCEPT rule to allow A -> B
-        # Insert at the top (1) to make sure it's matched before the DROP rules
-        run_cmd([
-            "iptables", "-I", "FORWARD", "1",
-            "-i", bridge_a,
-            "-o", bridge_b,
-            "-j", "ACCEPT"
-        ])
-        
-        # 2. Insert ACCEPT rule to allow B -> A
-        run_cmd([
-            "iptables", "-I", "FORWARD", "1",
-            "-i", bridge_b,
-            "-o", bridge_a,
-            "-j", "ACCEPT"
-        ])
-        
+        run_cmd(["iptables", "-I", "FORWARD", "1", "-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"])
+        run_cmd(["iptables", "-I", "FORWARD", "1", "-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"])
         log.info(f" Successfully peered '{vpc_a_name}' and '{vpc_b_name}'.")
     except Exception as e:
         log.error(f"An error occurred during peering: {e}")
         log.error("Attempting to clean up...")
-        delete_peering(vpc_a_name, vpc_b_name) # Try to roll back
+        delete_peering(vpc_a_name, vpc_b_name)
         sys.exit(1)
 
 def delete_peering(vpc_a_name, vpc_b_name):
-    """
-    Removes peering between two VPCs.
-    """
     log.info(f"--- Deleting Peering between '{vpc_a_name}' and '{vpc_b_name}' ---")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
-
     try:
-        # 1. Delete rule A -> B
-        run_cmd([
-            "iptables", "-D", "FORWARD",
-            "-i", bridge_a,
-            "-o", bridge_b,
-            "-j", "ACCEPT"
-        ], check=False)
-        
-        # 2. Delete rule B -> A
-        run_cmd([
-            "iptables", "-D", "FORWARD",
-            "-i", bridge_b,
-            "-o", bridge_a,
-            "-j", "ACCEPT"
-        ], check=False)
-        
+        run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"], check=False)
+        run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"], check=False)
         log.info(f" Successfully removed peering for '{vpc_a_name}' and '{vpc_b_name}'.")
     except Exception as e:
         log.error(f"An error occurred during peering deletion: {e}")
         sys.exit(1)
 
 def delete_all_peering_for_vpc(bridge_name):
-    """
-    Helper to remove all peering rules when a VPC is deleted.
-    This is a "best effort" cleanup.
-    """
     log.warning(f"   Peering rules for {bridge_name} may need to be manually cleaned.")
     pass
 
@@ -328,25 +362,24 @@ def main():
     parser_delete_subnet.add_argument("--internet-iface", type=str, help="Host's internet-facing interface (if it was 'public')")
 
     # peer-vpc
-    parser_peer_vpc = subparsers.add_parser(
-        "peer-vpc", help="Establish peering between two VPCs"
-    )
-    parser_peer_vpc.add_argument(
-        "--vpc-a", type=str, required=True, help="Name of the first VPC"
-    )
-    parser_peer_vpc.add_argument(
-        "--vpc-b", type=str, required=True, help="Name of the second VPC"
-    )
+    parser_peer_vpc = subparsers.add_parser("peer-vpc", help="Establish peering between two VPCs")
+    parser_peer_vpc.add_argument("--vpc-a", type=str, required=True, help="Name of the first VPC")
+    parser_peer_vpc.add_argument("--vpc-b", type=str, required=True, help="Name of the second VPC")
     
     # delete-peering
-    parser_delete_peering = subparsers.add_parser(
-        "delete-peering", help="Remove peering between two VPCs"
+    parser_delete_peering = subparsers.add_parser("delete-peering", help="Remove peering between two VPCs")
+    parser_delete_peering.add_argument("--vpc-a", type=str, required=True, help="Name of the first VPC")
+    parser_delete_peering.add_argument("--vpc-b", type=str, required=True, help="Name of the second VPC")
+
+    # apply-rules
+    parser_apply_rules = subparsers.add_parser(
+        "apply-rules", help="Apply a JSON security policy to a subnet"
     )
-    parser_delete_peering.add_argument(
-        "--vpc-a", type=str, required=True, help="Name of the first VPC"
-    )
-    parser_delete_peering.add_argument(
-        "--vpc-b", type=str, required=True, help="Name of the second VPC"
+    parser_apply_rules.add_argument(
+        "--policy",
+        type=str,
+        required=True,
+        help="Path to the JSON policy file"
     )
 
     # Parse args
@@ -361,13 +394,15 @@ def main():
         delete_vpc(args.name)
     elif args.command == "delete-subnet":
         delete_subnet(args.vpc, args.name, args.cidr, args.internet_iface)
-        
-    # Command handlers
     elif args.command == "peer-vpc":
         peer_vpc(args.vpc_a, args.vpc_b)
     elif args.command == "delete-peering":
         delete_peering(args.vpc_a, args.vpc_b)
         
+    # Command handler for applying rules
+    elif args.command == "apply-rules":
+        apply_rules(args.policy)
+
     else:
         log.error(f"Unknown command: {args.command}")
         parser.print_help()
