@@ -73,23 +73,24 @@ apply-firewall:
 	@echo "---"
 	@echo "Firewall rules applied."
 	@echo "---"
+	@echo "Run Validation Test 2: Step 4 (see README)"
 
 setup-peering: setup
-	@echo "Setting up VPC-B for Peering....."
+	@echo "Setting up VPC-B for Peering Test....."
 	sudo $(PYTHON_CMD) create-vpc --name $(VPC_B_NAME) --cidr $(VPC_B_CIDR)
 	sudo $(PYTHON_CMD) create-subnet --vpc $(VPC_B_NAME) --name private \
 		--cidr $(VPC_B_SUBNET) --type private
-	
-	@echo "Establishing Peering....."
-	sudo $(PYTHON_CMD) peer-vpc --vpc-a $(VPC_NAME) --vpc-b $(VPC_B_NAME)
 	@echo "---"
-	@echo "Peering test setup complete."
+	@echo "Both VPCs are created. Peering is NOT active."
 	@echo "---"
-	@echo "Run Validation Test 3 (see README)"
+	@echo "Now, follow 'Test 3: VPC Isolation & Peering' in the README.md to test isolation and apply peering."
+	@echo "   1. Test isolation: sudo ip netns exec ns-$(VPC_NAME)-private ping -c 3 $(VPC_B_GATEWAY)"
+	@echo "   2. Apply peering:  sudo ./vpcctl.py peer-vpc --vpc-a $(VPC_NAME) --vpc-b $(VPC_B_NAME)"
+	@echo "   3. Test peering:   sudo ip netns exec ns-$(VPC_NAME)-private ping -c 3 $(VPC_B_GATEWAY)"
 
 cleanup-peering:
 	@echo "Cleaning up Peering Test (VPC-A & VPC-B)....."
-	# 1. Delete peering rules (best effort)
+	# 1. Delete peering rules
 	-sudo $(PYTHON_CMD) delete-peering --vpc-a $(VPC_NAME) --vpc-b $(VPC_B_NAME)
 	# 2. Delete VPC-B
 	-sudo $(PYTHON_CMD) delete-subnet --vpc $(VPC_B_NAME) --name private --cidr $(VPC_B_SUBNET)

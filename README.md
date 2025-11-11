@@ -159,19 +159,37 @@ sudo make cleanup
 
 ### Test 3: VPC Isolation & Peering
 
-This test creates a second VPC (`vpc-dev`) and proves it's isolated, then proves peering works.
+This test uses the `make setup-peering` target to create two VPCs (`vpc-demo` and `vpc-dev`) and then guides you through manually testing isolation and applying the peering connection.
 
 #### 1. Run Peering Setup
+
+This command creates both `vpc-demo` (and its subnets) and `vpc-dev` (and its private subnet).
 
 ```bash
 sudo make setup-peering
 ```
 
-_(This automatically runs `setup` for `vpc-demo`, creates `vpc-dev`, and applies the peering connection.)_
+#### 2. Validation "Before" (Isolation)
 
-#### 2. Validation (Peering)
+Now, test that the VPCs are isolated. Try to ping from `vpc-demo` to `vpc-dev`. This will fail.
 
-Try to ping from `vpc-demo`'s private subnet to `vpc-dev`'s private subnet gateway.
+```bash
+sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
+```
+
+* **EXPECTED:** 100% packet loss. This proves default isolation works.
+
+### 3. Apply Peering
+
+Manually run the `peer-vpc` command to connect them.
+
+```bash
+sudo ./vpcctl.py peer-vpc --vpc-a vpc-demo --vpc-b vpc-dev
+```
+
+### 4. Validation "Afetr" (Peering)
+
+Run the exact same ping test again.
 
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
@@ -179,32 +197,12 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 
 * **EXPECTED:** 0% packet loss. This proves peering is successful.
 
-### 3. Test Isolation (Optional)
-
-To prove isolation was working before peering, you can delete the peering and test again.
-
-```bash
-# Delete the peering rules
-sudo ./vpcctl.py delete-peering --vpc-a vpc-demo --vpc-b vpc-dev
-
-# Try the ping again
-sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
-```
-
-* **EXPECTED:** 100% packet loss. This proves the default isolation works.
-
 ### 4. Cleanup
 
 * To clean up the peering test (removes **both** VPCs):
 
 ```bash
 sudo make cleanup-peering
-```
-
-* To clean up the standard demo (removes `vpc-demo` only):
-
-```bash
-sudo make cleanup
 ```
 
 ## Manual Usage (Step-by-Step)
