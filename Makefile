@@ -2,8 +2,8 @@
 
 # Primary Targets:
 #   sudo make setup           (Creates vpc-demo)
-#   sudo make test-firewall   (Creates vpc-demo, starts web server, applies rules)
-#   sudo make setup-peering   (Creates vpc-demo, vpc-dev, and peers them)
+#   sudo make apply-firewall   (Creates policy file, applies rules)
+#   sudo make setup-peering   (Creates vpc-demo, vpc-dev)
 
 # Cleanup Targets:
 #   sudo make cleanup         (Deletes vpc-demo only)
