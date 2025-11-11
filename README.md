@@ -109,14 +109,6 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 10.100.1.1
 
 * **EXPECTED:** 0% packet loss. This proves the private subnet can route traffic to the public subnet's gateway via the main bridge.
 
-**Cleanup:**
-
-This removes vpc-demo, with the public/private subnets created by `make setup` in step 1:
-
-```bash
-sudo make cleanup
-```
-
 ### Test 2: Security Group (Firewall)
 
 This test applies a firewall rule to the private subnet to allow web traffic.
@@ -156,6 +148,14 @@ curl http://10.100.2.2:80
 ```
 
 * **EXPECTED:** Success. You will see the HTML output from the Python server. This proves the JSON policy was applied.
+
+#### 5. Cleanup
+
+This stops the **test server** (if running), deletes the **subnets** (public/private), deletes `vpc-demo`, and removes the `policy.json` file.
+
+```bash
+sudo make cleanup
+```
 
 ### Test 3: VPC Isolation & Peering
 

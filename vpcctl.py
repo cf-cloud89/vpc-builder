@@ -111,7 +111,7 @@ def find_subnets_for_vpc(vpc_name):
 
 # Core VPC Function
 def create_vpc(vpc_name, cidr_block):
-    log.info(f"--- Creating VPC '{vpc_name}' ({cidr_block}) ---")
+    log.info(f"Creating VPC '{vpc_name}' ({cidr_block})...")
     bridge_name = get_bridge_name(vpc_name)
     stdout, _ = run_cmd(["ip", "-br", "link", "show", "dev", bridge_name], check=False, capture=True)
     if bridge_name in stdout:
@@ -136,7 +136,7 @@ def create_vpc(vpc_name, cidr_block):
 
 # Subnet & Routing Function
 def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None):
-    log.info(f"--- Creating Subnet '{subnet_name}' in VPC '{vpc_name}' ({cidr}) ---")
+    log.info(f"Creating Subnet '{subnet_name}' in VPC '{vpc_name}' ({cidr})...")
     if subnet_type == "public" and not internet_iface:
         log.error("Missing argument: --internet-iface is required for 'public' subnets.")
         sys.exit(1)
@@ -193,7 +193,7 @@ def apply_rules(policy_file):
     """
     Applies firewall rules to a subnet from a JSON file.
     """
-    log.info(f"--- Applying Security Group rules from '{policy_file}' ---")
+    log.info(f"Applying Security Group rules from '{policy_file}'...")
     
     try:
         with open(policy_file, 'r') as f:
@@ -274,7 +274,7 @@ def delete_subnet(vpc_name, subnet_name, subnet_cidr, internet_iface=None):
     log.info(f" Successfully deleted Subnet '{subnet_name}'.")
 
 def delete_vpc(vpc_name, internet_iface=None):
-    log.info(f"--- Deleting VPC '{vpc_name}' ---")
+    log.info(f"Deleting VPC '{vpc_name}'...")
     bridge_name = get_bridge_name(vpc_name)
     log.info("   Finding associated subnets (namespaces)...")
     subnets = find_subnets_for_vpc(vpc_name)
@@ -298,13 +298,29 @@ def delete_vpc(vpc_name, internet_iface=None):
 
 # Peering Function
 def peer_vpc(vpc_a_name, vpc_b_name):
-    log.info(f"--- Establishing Peering between '{vpc_a_name}' and '{vpc_b_name}' ---")
+    """
+    Establishes peering between two VPCs by adding iptables rules.
+    """
+    log.info(f"Establishing Peering between '{vpc_a_name}' and '{vpc_b_name}'...")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
+
     try:
-        run_cmd(["iptables", "-I", "FORWARD", "1", "-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"])
-        run_cmd(["iptables", "-I", "FORWARD", "1", "-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"])
-        log.info(f" Successfully peered '{vpc_a_name}' and '{vpc_b_name}'.")
+        run_cmd([
+            "iptables", "-I", "FORWARD",
+            "-i", bridge_a,
+            "-o", bridge_b,
+            "-j", "ACCEPT"
+        ])
+
+        run_cmd([
+            "iptables", "-I", "FORWARD",
+            "-i", bridge_b,
+            "-o", bridge_a,
+            "-j", "ACCEPT"
+        ])
+        
+        log.info(f"Successfully peered '{vpc_a_name}' and '{vpc_b_name}'.")
     except Exception as e:
         log.error(f"An error occurred during peering: {e}")
         log.error("Attempting to clean up...")
@@ -312,7 +328,7 @@ def peer_vpc(vpc_a_name, vpc_b_name):
         sys.exit(1)
 
 def delete_peering(vpc_a_name, vpc_b_name):
-    log.info(f"--- Deleting Peering between '{vpc_a_name}' and '{vpc_b_name}' ---")
+    log.info(f"Deleting Peering between '{vpc_a_name}' and '{vpc_b_name}'...")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
     try:
