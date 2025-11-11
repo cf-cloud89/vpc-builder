@@ -296,45 +296,66 @@ def delete_vpc(vpc_name, internet_iface=None):
     run_cmd(["ip", "link", "delete", "dev", bridge_name, "type", "bridge"], check=False)
     log.info(f" Successfully deleted VPC '{vpc_name}'.")
 
-# Peering Function
+# Peering Functions
 def peer_vpc(vpc_a_name, vpc_b_name):
     """
-    Establishes peering between two VPCs by adding iptables rules.
+    Establishes peering between two VPCs (Idempotent).
     """
     log.info(f"Establishing Peering between '{vpc_a_name}' and '{vpc_b_name}'...")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
 
     try:
-        run_cmd([
-            "iptables", "-I", "FORWARD",
-            "-i", bridge_a,
-            "-o", bridge_b,
-            "-j", "ACCEPT"
-        ])
-
-        run_cmd([
-            "iptables", "-I", "FORWARD",
-            "-i", bridge_b,
-            "-o", bridge_a,
-            "-j", "ACCEPT"
-        ])
+        rule_a_b = ["-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"]
+        stdout, stderr = run_cmd(["iptables", "-C", "FORWARD"] + rule_a_b, check=False)
+        if "Bad rule" in stderr or "does not exist" in stderr:
+            log.info(f"   Adding rule: {vpc_a_name} -> {vpc_b_name}")
+            run_cmd(["iptables", "-I", "FORWARD"] + rule_a_b)
+        else:
+            log.warning(f"   Rule: {vpc_a_name} -> {vpc_b_name} already exists.")
         
+        rule_b_a = ["-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"]
+        stdout, stderr = run_cmd(["iptables", "-C", "FORWARD"] + rule_b_a, check=False)
+        if "Bad rule" in stderr or "does not exist" in stderr:
+            log.info(f"   Adding rule: {vpc_b_name} -> {vpc_a_name}")
+            run_cmd(["iptables", "-I", "FORWARD"] + rule_b_a)
+        else:
+            log.warning(f"   Rule: {vpc_b_name} -> {vpc_a_name} already exists.")
+
         log.info(f"Successfully peered '{vpc_a_name}' and '{vpc_b_name}'.")
+
     except Exception as e:
         log.error(f"An error occurred during peering: {e}")
-        log.error("Attempting to clean up...")
-        delete_peering(vpc_a_name, vpc_b_name)
         sys.exit(1)
 
 def delete_peering(vpc_a_name, vpc_b_name):
+    """
+    Removes all instances of peering rules between two VPCs.
+    """
     log.info(f"Deleting Peering between '{vpc_a_name}' and '{vpc_b_name}'...")
     bridge_a = get_bridge_name(vpc_a_name)
     bridge_b = get_bridge_name(vpc_b_name)
+
+    rule_a_b = ["-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"]
+    rule_b_a = ["-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"]
+    
     try:
-        run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_a, "-o", bridge_b, "-j", "ACCEPT"], check=False)
-        run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_b, "-o", bridge_a, "-j", "ACCEPT"], check=False)
-        log.info(f" Successfully removed peering for '{vpc_a_name}' and '{vpc_b_name}'.")
+        log.info(f"   Deleting all instances of rule: {vpc_a_name} -> {vpc_b_name}")
+        while True:
+            _, stderr = run_cmd(["iptables", "-D", "FORWARD"] + rule_a_b, check=False)
+            
+            if "Bad rule" in stderr or "does not exist" in stderr:
+                break
+        
+        log.info(f"   Deleting all instances of rule: {vpc_b_name} -> {vpc_a_name}")
+        while True:
+            _, stderr = run_cmd(["iptables", "-D", "FORWARD"] + rule_b_a, check=False)
+            
+            if "Bad rule" in stderr or "does not exist" in stderr:
+                break
+        
+        log.info(f"Successfully removed peering for '{vpc_a_name}' and '{vpc_b_name}'.")
+
     except Exception as e:
         log.error(f"An error occurred during peering deletion: {e}")
         sys.exit(1)
