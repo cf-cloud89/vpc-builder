@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-vpcctl - A tool to build and manage Virtual Private Clouds (VPCs) on a Linux host.
+vpcctl - A tool to build and manage Virtual Private Clouds (VPCs) on Linux hosts.
 """
 
 import argparse
@@ -12,6 +12,7 @@ import os
 import ipaddress
 import re
 import json
+import hashlib
 
 # Set up logging to print clearly
 logging.basicConfig(
@@ -23,7 +24,6 @@ log = logging.getLogger(__name__)
 
 
 # Core Utility Function
-
 def run_cmd(cmd_list, check=True, capture=True):
     """
     Runs a shell command, logs it, and handles errors.
@@ -52,7 +52,6 @@ def run_cmd(cmd_list, check=True, capture=True):
             log.warning(f"STDERR: {stderr.strip()}")
         elif stderr and process.returncode != 0:
             log.error(f"STDERR: {stderr.strip()}")
-
         return stdout, stderr
 
     except FileNotFoundError as e:
@@ -73,11 +72,16 @@ def get_namespace_name(vpc_name, subnet_name):
     return f"ns-{vpc_name}-{subnet_name}"
 
 def get_veth_pair_names(vpc_name, subnet_name):
-    """Gets the names for the veth pair."""
-    # Use both names to create a unique ID
-    unique_id = f"{vpc_name}-{subnet_name}"
-    ns_side = f"veth-{unique_id}-ns"
-    br_side = f"veth-{unique_id}-br"
+    """
+    Gets a unique (and short) names for the veth pair
+    """
+    unique_str = f"{vpc_name}-{subnet_name}"
+    hash_id = hashlib.md5(unique_str.encode()).hexdigest()[:3] # e.g. 'a1b'
+    v_abbr = vpc_name[:2]   # e.g. "vpc-demo" -> "vp"
+    s_abbr = subnet_name[:2] # e.g. "public"   -> "pu"
+    unique_id = f"{v_abbr}{s_abbr}{hash_id}" # e.g. "vppua1b"
+    ns_side = f"veth-{unique_id}-ns"  # e.g. veth-vppua1b-ns
+    br_side = f"veth-{unique_id}-br"  # e.g. veth-vppua1b-br
     return (ns_side, br_side)
 
 def get_gateway_ip(cidr):
@@ -164,13 +168,9 @@ def create_subnet(vpc_name, subnet_name, cidr, subnet_type, internet_iface=None)
         run_cmd(["ip", "netns", "exec", namespace_name, "ip", "link", "set", "dev", veth_ns, "up"])
         run_cmd(["ip", "netns", "exec", namespace_name, "ip", "route", "add", "default", "via", gateway_ip])
         
-        # Add default stateful rules to namespace
         log.info("   Applying default stateful firewall rules to namespace...")
-        # 1. Set default policy to DROP all incoming traffic
         run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-P", "INPUT", "DROP"])
-        # 2. Allow loopback traffic (important for many services)
         run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"])
-        # 3. Allow established connections (makes firewall stateful)
         run_cmd(["ip", "netns", "exec", namespace_name, "iptables", "-A", "INPUT", "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"])
 
         if subnet_type == "public":
@@ -224,9 +224,8 @@ def apply_rules(policy_file):
         try:
             port = rule['port']
             protocol = rule['protocol'].lower()
-            action_json = rule['action'].upper() # Get "ACCEPT" or "DENY"
+            action_json = rule['action'].upper()
             
-            # Translate JSON action to a valid iptables 'target'
             if action_json == "ACCEPT":
                 iptables_target = "ACCEPT"
             elif action_json == "DENY":
@@ -239,7 +238,7 @@ def apply_rules(policy_file):
             
             run_cmd([
                 "ip", "netns", "exec", namespace_name,
-                "iptables", "-I", "INPUT", "3", # Insert after lo and ESTABLISHED
+                "iptables", "-I", "INPUT", "3",
                 "-p", protocol,
                 "--dport", str(port),
                 "-j", iptables_target
@@ -330,7 +329,6 @@ def delete_all_peering_for_vpc(bridge_name):
 
 
 # Main CLI Parser
-
 def main():
     parser = argparse.ArgumentParser(
         description="vpcctl - The Linux VPC management tool",
