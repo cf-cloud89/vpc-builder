@@ -1,9 +1,9 @@
-# vpc-builder
-## Build Linux VPC Using vpcctl
+# vpcctl: Linux VPC from Scratch
 
 `vpcctl` is a Python CLI tool that builds a mini Virtual Private Cloud (VPC) on a single Linux host from first principles. It uses network namespaces, veth pairs, bridges, and `iptables` to simulate subnets (public/private), routing, NAT, security groups, and VPC peering.
 
 This project was built to understand the underlying technologies that power cloud networking.
+
 
 ## Architecture
 
@@ -19,43 +19,51 @@ The architecture is built on standard Linux networking primitives:
 ## Prerequisites
 
 1. You must be on a Linux host (e.g., an EC2 instance) with `sudo` or `root` privileges.
-3. You will need the following packages installed:
+
+2. You will need the following packages installed:
+
 * `python3` (v3.6+)
 * `iproute2` (provides the `ip` command)
 * `iptables` (provides the `iptables` command)
 * `make` (for the Makefile)
-4.  Required packages: `python3`, `iproute2` (for `ip`), and `iptables`.
+
 **On a new Amazon Linux instance, run**
+
 ```bash
 sudo yum install iptables-services -y
 sudo yum install make -y
 ```
 
-4.  Optional test tools:
+3. Optional test tool:
+
 ```bash
 sudo yum install nmap -y
 ```
 
 ## Installation
 
-1.  Clone the repository:
+1. Clone the repository:
+
 ```bash
 git clone https://github.com/cf-cloud89/vpc-builder.git
 cd vpc-builder
 ```
 
-2.  Make the script executable:
+2. Make the script executable:
+
 ```bash
 chmod +x vpcctl.py
 ```
 
-3.  **IMPORTANT:** Edit the `Makefile` and set the `IFACE` variable to your host's main internet interface (e.g., `enX0`, `eth0`).
+3. **IMPORTANT:** Edit the `Makefile` and set the `IFACE` variable to your host's main internet interface (e.g., `enX0`, `eth0`).
 **Find your interface**
+
 ```bash
 ip a
 ```
 
 **Edit the Makefile**
+
 ```bash
 vi Makefile
 ```
@@ -63,20 +71,22 @@ vi Makefile
 ---
 ## Automated (Makefile) Validation Tests
 
-This guide uses the `Makefile` for automating the VPC resources setup and cleanup. Run these tests in order.
+This guide uses the `Makefile` for automating the VPC resources setup and cleanup. Run these tests in order
 
 ### Test 1: Core VPC, NAT & Routing
 
 This test creates `vpc-demo` with a public and private subnet.
 
-#### 1. Run Setup:
+#### 1. Run Setup
+
 ```bash
 sudo make setup
 ```
 
-#### 2. Validation (NAT & Routing):
+#### 2. Validation (NAT & Routing)
 
 **Public NAT (Internet Access):**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-public ping -c 3 8.8.8.8
 ```
@@ -84,6 +94,7 @@ sudo ip netns exec ns-vpc-demo-public ping -c 3 8.8.8.8
 * **EXPECTED:** 0% packet loss. This proves the public subnet's NAT works.
 
 **Private Subnet (No Internet):**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 8.8.8.8
 ```
@@ -91,30 +102,55 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 8.8.8.8
 * **EXPECTED:** 100% packet loss. This proves the private subnet is isolated.
 
 **Inter-Subnet Routing:**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.100.1.1
 ```
+
 * **EXPECTED:** 0% packet loss. This proves the private subnet can route traffic to the public subnet's gateway via the main bridge.
+
+**Cleanup:**
+
+This removes vpc-demo, with the public/private subnets created by `make setup` in step 1:
+
+```bash
+sudo make cleanup
+```
 
 ### Test 2: Security Group (Firewall)
 
 This test applies a firewall rule to the private subnet to allow web traffic.
 
-#### 1. Run Test Setup:
+#### 1. Start the Server
+
+First, manually start a web server _inside_ the private subnet:
+
 ```bash
-sudo make test-firewall
+sudo ip netns exec ns-vpc-demo-private python3 -m http.server 80 &
 ```
 
-_(This automatically runs `setup` first, then starts a web server in the private subnet and applies a JSON policy to allow port 80.)_
+#### 2. Validation "Before" (Blocked)
 
-#### 2. Validation (Firewall):
+Now, try to `curl` the server from the host. It will fail because the firewall's default policy is `DROP`.
 
-**Test "Before" (Blocked):** _(The `test-firewall` command already did this, but you can see the test here.) The default `DROP` policy on the namespace blocks all new traffic._
 ```bash
-# This test would time out before 'make test-firewall' is run
 curl --connect-timeout 2 http://10.100.2.2:80
 ```
-**Test "After" (Allowed):** Now that the firewall rule is applied, the connection is accepted.
+
+* **EXPECTED:** `curl: (28) Connection timed out...`
+
+#### 3. Apply Firewall Rules
+
+Run the `make` target. This will create `policy.json` and apply the `ACCEPT` rule for port 80.
+
+```bash
+sudo make apply-firewall
+```
+
+#### 4. Validation "After" (Allowed)
+
+Now that the firewall rule is applied, try to curl the server again.
+
 ```bash
 curl http://10.100.2.2:80
 ```
@@ -123,52 +159,50 @@ curl http://10.100.2.2:80
 
 ### Test 3: VPC Isolation & Peering
 
-This test creates a second VPC (`vpc-dev`) and proves it's isolated by default, then proves peering works.
+This test creates a second VPC (`vpc-dev`) and proves it's isolated, then proves peering works.
 
-#### 1. Validation "Before" (Isolation):
+#### 1. Run Peering Setup
 
-_(Run this before `make setup-peering`, but after `make setup`)_
-
-**Create the `vpc-dev` manually to test isolation:**
-```bash
-sudo ./vpcctl.py create-vpc --name vpc-dev --cidr 10.200.0.0/16
-sudo ./vpcctl.py create-subnet --vpc vpc-dev --name private \
-  --cidr 10.200.1.0/24 --type private
-  ```
-
-**Try to ping from `vpc-demo` to `vpc-dev`:**
-```bash
-sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
-```
-
-* **EXPECTED:** 100% packet loss. This proves VPCs are isolated.
-
-#### 2. Run Peering Setup: 
-
-_(Clean up the manual `vpc-dev` first if you ran the test above: `sudo ./vpcctl.py delete-vpc --name vpc-dev`)_
 ```bash
 sudo make setup-peering
 ```
 
-_(This runs `setup` for `vpc-demo`, creates `vpc-dev`, and applies the peering connection.)_
+_(This automatically runs `setup` for `vpc-demo`, creates `vpc-dev`, and applies the peering connection.)_
 
-#### 3. Validation "After" (Peering):
+#### 2. Validation (Peering)
 
-**Try the ping from vpc-demo to vpc-dev again.**
+Try to ping from `vpc-demo`'s private subnet to `vpc-dev`'s private subnet gateway.
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 ```
 
 * **EXPECTED:** 0% packet loss. This proves peering is successful.
 
-### Cleanup
+### 3. Test Isolation (Optional)
 
-To clean up the peering test (removes both VPCs):
+To prove isolation was working before peering, you can delete the peering and test again.
+
+```bash
+# Delete the peering rules
+sudo ./vpcctl.py delete-peering --vpc-a vpc-demo --vpc-b vpc-dev
+
+# Try the ping again
+sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
+```
+
+* **EXPECTED:** 100% packet loss. This proves the default isolation works.
+
+### 4. Cleanup
+
+* To clean up the peering test (removes **both** VPCs):
+
 ```bash
 sudo make cleanup-peering
 ```
 
-To clean up the standard demo (removes vpc-demo only):
+* To clean up the standard demo (removes `vpc-demo` only):
+
 ```bash
 sudo make cleanup
 ```
@@ -192,12 +226,14 @@ This creates namespaces and connects them to the VPC.
 **Find your internet interface:** Run `ip a` and find your main interface (e.g., `enX0`, `eth0`).
 
 **Example (Public):**
+
 ```bash
 sudo ./vpcctl.py create-subnet --vpc vpc-demo --name public \
   --cidr 10.100.1.0/24 --type public --internet-iface enX0
 ```
 
 **Example (Private):**
+
 ```bash
 sudo ./vpcctl.py create-subnet --vpc vpc-demo --name private \
   --cidr 10.100.2.0/24 --type private
@@ -207,6 +243,7 @@ sudo ./vpcctl.py create-subnet --vpc vpc-demo --name private \
 
 Create a JSON file (e.g., `policy.json`) and apply it to a subnet.
 `policy.json`:
+
 ```json
 {
   "vpc": "vpc-demo",
@@ -219,6 +256,7 @@ Create a JSON file (e.g., `policy.json`) and apply it to a subnet.
 ```
 
 **Apply the policy:**
+
 ```bash
 sudo ./vpcctl.py apply-rules --policy ./policy.json
 ```
@@ -226,6 +264,7 @@ sudo ./vpcctl.py apply-rules --policy ./policy.json
 ### 4. Peer VPCs
 
 This allows two different VPCs (and their subnets) to communicate.
+
 ```bash
 # First, create a second VPC
 sudo ./vpcctl.py create-vpc --name vpc-dev --cidr 10.200.0.0/16
@@ -241,23 +280,27 @@ sudo ./vpcctl.py peer-vpc --vpc-a vpc-demo --vpc-b vpc-dev
 To prevent orphaned resources, **delete subnets** first, then the VPC.
 
 ##### 1. Delete the public subnet
+
 ```bash
 sudo ./vpcctl.py delete-subnet --vpc vpc-demo --name public \
   --cidr 10.100.1.0/24 --internet-iface enX0
   ```
  
 ##### 2. Delete the private subnet
+
 ```bash
 sudo ./vpcctl.py delete-subnet --vpc vpc-demo --name private \
   --cidr 10.100.2.0/24
 ```
 
 ##### 3. Delete the peering (if it exists)
+
 ```bash
 sudo ./vpcctl.py delete-peering --vpc-a vpc-demo --vpc-b vpc-dev
 ```
 
 ##### 4. Delete the empty VPC
+
 ```bash
 sudo ./vpcctl.py delete-vpc --name vpc-demo
 ```
@@ -267,6 +310,7 @@ sudo ./vpcctl.py delete-vpc --name vpc-demo
 ### Test 1: Public & Private Subnets
 
 **Test public subnet internet access**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-public ping -c 3 8.8.8.8
 ```
@@ -274,6 +318,7 @@ sudo ip netns exec ns-vpc-demo-public ping -c 3 8.8.8.8
 * **EXPECTED:** 0% packet loss
 
 **Test private subnet internet access**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 8.8.8.8
 ```
@@ -285,6 +330,7 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 8.8.8.8
 This tests that subnets can talk to each other via the VPC router (the bridge).
 
 From the private subnet, ping the public subnet's GATEWAY IP
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.100.1.1
 ```
@@ -295,6 +341,7 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 10.100.1.1
 
 _(Assuming vpc-demo and vpc-dev are created)_
 **From vpc-demo, try to ping vpc-dev's subnet gateway**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 ```
@@ -302,11 +349,13 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 * **EXPECTED:** 100% packet loss (Isolation works)
 
 **Now, establish peering**
+
 ```bash
 sudo ./vpcctl.py peer-vpc --vpc-a vpc-demo --vpc-b vpc-dev
 ```
 
 **Try the ping again**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 ```
@@ -316,11 +365,13 @@ sudo ip netns exec ns-vpc-demo-private ping -c 3 10.200.1.1
 ### Test 4: Security Group (Firewall)
 
 **Start a server in the 'private' subnet (IP will be 10.100.2.2)**
+
 ```bash
 sudo ip netns exec ns-vpc-demo-private python3 -m http.server 80 &
 ```
 
 **Try to curl it from the host**
+
 ```bash
 curl --connect-timeout 2 http://10.100.2.2:80
 ```
@@ -329,11 +380,13 @@ curl --connect-timeout 2 http://10.100.2.2:80
 
 **Apply a rule to allow port 80**
 _(create `policy.json` for vpc-demo/private first)_
+
 ```bash
 sudo ./vpcctl.py apply-rules --policy ./policy.json
 ```
 
 **Try to curl again**
+
 ```bash
 curl http://10.100.2.2:80
 ```
