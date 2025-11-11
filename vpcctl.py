@@ -111,21 +111,33 @@ def find_subnets_for_vpc(vpc_name):
 
 # Core VPC Function
 def create_vpc(vpc_name, cidr_block):
-    log.info(f"Creating VPC '{vpc_name}' ({cidr_block})...")
+    """Creates a new VPC bridge and isolation rules."""
+    log.info(f"--- Creating VPC '{vpc_name}' ({cidr_block}) ---")
     bridge_name = get_bridge_name(vpc_name)
-    stdout, _ = run_cmd(["ip", "-br", "link", "show", "dev", bridge_name], check=False, capture=True)
+
+    stdout, stderr = run_cmd(["ip", "-br", "link", "show", "dev", bridge_name], check=False, capture=True)
     if bridge_name in stdout:
         log.warning(f"VPC '{vpc_name}' (bridge '{bridge_name}') already exists. Skipping creation.")
         return
+
     try:
         run_cmd(["ip", "link", "add", "name", bridge_name, "type", "bridge"])
         run_cmd(["ip", "link", "set", "dev", bridge_name, "up"])
+        
+        log.info("   Enabling br_netfilter for firewalling...")
+        run_cmd(["modprobe", "br_netfilter"], check=False)
+        run_cmd(["sysctl", "-w", "net.bridge.bridge-nf-call-iptables=1"])
+        run_cmd(["sysctl", "-w", "net.bridge.bridge-nf-call-ip6tables=1"])
+
         run_cmd(["sysctl", "-w", f"net.ipv4.conf.{bridge_name}.forwarding=1"])
         run_cmd(["sysctl", "-w", "net.ipv4.ip_forward=1"])
-        run_cmd(["iptables", "-I", "FORWARD", "-i", bridge_name, "-o", bridge_name, "-j", "ACCEPT"])
-        run_cmd(["iptables", "-I", "FORWARD", "-i", bridge_name, "!", "-o", bridge_name, "-j", "DROP"])
-        run_cmd(["iptables", "-I", "FORWARD", "-o", bridge_name, "!", "-i", bridge_name, "-j", "DROP"])
-        log.info(f" Successfully created VPC '{vpc_name}'.")
+        
+        run_cmd(["iptables", "-A", "FORWARD", "-i", bridge_name, "-o", bridge_name, "-j", "ACCEPT"])
+        
+        run_cmd(["iptables", "-A", "FORWARD", "-i", bridge_name, "-j", "DROP"])
+        run_cmd(["iptables", "-A", "FORWARD", "-o", bridge_name, "-j", "DROP"])
+
+        log.info(f"Successfully created VPC '{vpc_name}'.")
     except Exception as e:
         log.error(f"An error occurred during VPC creation: {e}")
         log.error("Attempting to clean up...")
@@ -288,8 +300,8 @@ def delete_vpc(vpc_name, internet_iface=None):
         run_cmd(["ip", "netns", "delete", ns_name], check=False)
     log.info(f"   Deleting VPC isolation rules for {bridge_name}...")
     run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_name, "-o", bridge_name, "-j", "ACCEPT"], check=False)
-    run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_name, "!", "-o", bridge_name, "-j", "DROP"], check=False)
-    run_cmd(["iptables", "-D", "FORWARD", "-o", bridge_name, "!", "-i", bridge_name, "-j", "DROP"], check=False)
+    run_cmd(["iptables", "-D", "FORWARD", "-i", bridge_name, "-j", "DROP"], check=False)
+    run_cmd(["iptables", "-D", "FORWARD", "-o", bridge_name, "-j", "DROP"], check=False)  
     log.info(f"   Cleaning up any orphaned peering rules for {bridge_name}...")
     delete_all_peering_for_vpc(bridge_name)
     run_cmd(["ip", "link", "set", "dev", bridge_name, "down"], check=False)
