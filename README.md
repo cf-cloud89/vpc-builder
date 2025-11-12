@@ -6,6 +6,10 @@ This project was built to understand the underlying technologies that power clou
 
 ## Architecture
 
+####Architectural Diangram
+
+![How VPCs Work Under-the-Hood on a Linux Host](VPConLinux.png)
+
 The architecture is built on standard Linux networking primitives:
 
 * **VPC:** A "VPC" is implemented as a **Linux bridge** (`br-<vpc-name>`). It acts as the L2 switch and L3 router for all subnets within it. `iptables` rules on the host provide complete isolation between VPCs.
