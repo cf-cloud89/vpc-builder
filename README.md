@@ -6,7 +6,7 @@ This project was built to understand the underlying technologies that power clou
 
 ## Architecture
 
-####Architectural Diangram
+##### Pictorial Model
 
 ![How VPCs Work Under-the-Hood on a Linux Host](VPConLinux.png)
 
