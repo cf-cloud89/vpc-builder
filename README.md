@@ -12,31 +12,23 @@ The architecture is built on standard Linux networking primitives:
 * **Subnet:** A "Subnet" is a **network namespace** (`ns-<vpc-name>-<subnet-name>`). This provides total process and network isolation.
 * **Connection:** A **veth pair** ("virtual ethernet cable") connects each subnet (namespace) to its VPC (bridge).
 * **Routing:** The host's kernel, with `net.ipv4.ip_forward=1`, provides routing. The bridge device is assigned the gateway IP for each subnet (e.g., `10.0.1.1`).
-* **NAT Gateway:** A "public subnet" is simply a subnet whose CIDR has a `MASQUERADE` `iptables` rule, allowing it to use the host's internet connection.
-* **Security Group:** A "security group" is implemented as `iptables` rules on the `INPUT` chain *inside* the namespace, providing a stateful, default-deny firewall.
+* **NAT Gateway:** A "public subnet" is simply a subnet whose CIDR has a `MASQUERADE` `iptables` rule that allows it to use the host's internet connection.
+* **Security Group:** A "security group" is implemented as `iptables` rules on the `INPUT` chain *inside* the namespace, to provide a stateful, default-deny firewall.
 
 ## Prerequisites
 
-1. You must be on a Linux host (e.g., an EC2 instance) with `sudo` or `root` privileges.
+1. You must be on a Linux host (e.g., an EC2 instance).
 
 2. You will need the following packages installed:
 
 * `python3` (v3.6+)
-* `iproute2` (provides the `ip` command)
 * `iptables` (provides the `iptables` command)
 * `make` (for the Makefile)
 
 **On a new Amazon Linux instance, run**
 
 ```bash
-sudo yum install iptables-services -y
-sudo yum install make -y
-```
-
-3. Optional test tool:
-
-```bash
-sudo yum install nmap -y
+sudo yum install iptables make -y
 ```
 
 ## Installation
@@ -210,7 +202,7 @@ All commands must be run with `sudo`. The examples below build the same environm
 
 ### 1. Create a VPC
 
-This creates the main "container" (a bridge) for your subnets.
+This creates the bridge for your subnets.
 
 ```bash
 sudo ./vpcctl.py create-vpc --name vpc-demo --cidr 10.100.0.0/16
@@ -218,7 +210,7 @@ sudo ./vpcctl.py create-vpc --name vpc-demo --cidr 10.100.0.0/16
 
 ### 2. Create Subnets
 
-This creates namespaces and connects them to the VPC.
+This creates namespaces and connects them to the VPC (bridge).
 
 **Find your internet interface:** Run `ip a` and find your main interface (e.g., `enX0`, `eth0`).
 
@@ -238,7 +230,7 @@ sudo ./vpcctl.py create-subnet --vpc vpc-demo --name private \
 
 ### 3. Apply Security Group Rules
 
-Create a JSON file (e.g., `policy.json`) and apply it to a subnet.
+Create a JSON file (e.g., `policy.json`) and apply it to the private subnet.
 `policy.json`:
 
 ```json
@@ -274,27 +266,27 @@ sudo ./vpcctl.py peer-vpc --vpc-a vpc-demo --vpc-b vpc-dev
 
 ### 5. Cleanup (Tear Down)
 
+##### 1. Delete the peering
+
+```bash
+sudo ./vpcctl.py delete-peering --vpc-a vpc-demo --vpc-b vpc-dev
+```
+
 To prevent orphaned resources, **delete subnets** first, then the VPC.
 
-##### 1. Delete the public subnet
+##### 2. Delete the public subnet
 
 ```bash
 sudo ./vpcctl.py delete-subnet --vpc vpc-demo --name public \
   --cidr 10.100.1.0/24 --internet-iface enX0
   ```
 
-##### 2. Delete the private subnet
+##### 3. Delete the private subnet
 
 ```bash
 sudo ./vpcctl.py delete-subnet --vpc vpc-demo --name private \
   --cidr 10.100.2.0/24
-```
-
-##### 3. Delete the peering (if it exists)
-
-```bash
-sudo ./vpcctl.py delete-peering --vpc-a vpc-demo --vpc-b vpc-dev
-```
+``` 
 
 ##### 4. Delete the empty VPC
 
