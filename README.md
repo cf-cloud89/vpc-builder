@@ -1,9 +1,8 @@
-# vpcctl: Linux VPC from Scratch
+# vpcctl - A Tool for Building and Managing Virtual Private Clouds (VPCs) on Linux hosts
 
 `vpcctl` is a Python CLI tool that builds a mini Virtual Private Cloud (VPC) on a single Linux host from first principles. It uses network namespaces, veth pairs, bridges, and `iptables` to simulate subnets (public/private), routing, NAT, security groups, and VPC peering.
 
 This project was built to understand the underlying technologies that power cloud networking.
-
 
 ## Architecture
 
@@ -187,7 +186,7 @@ Manually run the `peer-vpc` command to connect them.
 sudo ./vpcctl.py peer-vpc --vpc-a vpc-demo --vpc-b vpc-dev
 ```
 
-### 4. Validation "Afetr" (Peering)
+### 4. Validation "After" (Peering)
 
 Run the exact same ping test again.
 
@@ -283,7 +282,7 @@ To prevent orphaned resources, **delete subnets** first, then the VPC.
 sudo ./vpcctl.py delete-subnet --vpc vpc-demo --name public \
   --cidr 10.100.1.0/24 --internet-iface enX0
   ```
- 
+
 ##### 2. Delete the private subnet
 
 ```bash
