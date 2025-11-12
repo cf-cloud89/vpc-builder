@@ -1,4 +1,4 @@
-# Makefile for vpcctl: Build Linux VPCs with Network Namespaces
+# Makefile for vpcctl
 
 # Primary Targets:
 #   sudo make setup           (Creates vpc-demo)
@@ -9,10 +9,9 @@
 #   sudo make cleanup         (Deletes vpc-demo only)
 #   sudo make cleanup-peering (Deletes BOTH vpc-demo and vpc-dev)
 
-# Note: You must run this with sudo.
+# Note: You must run the commands with sudo.
 
-# Configuration (VPC-A / Demo)
-# !!! IMPORTANT: Change IFACE to your host's internet interface !!!
+# IMPORTANT: Change IFACE to your host's internet interface!!!
 IFACE          = enX0
 
 VPC_NAME       = vpc-demo
@@ -20,7 +19,7 @@ VPC_CIDR       = 10.100.0.0/16
 PUBLIC_SUBNET  = 10.100.1.0/24
 PRIVATE_SUBNET = 10.100.2.0/24
 
-# IPs for testing (must match the subnets above)
+# IPs for testing
 PUBLIC_SUBNET_GATEWAY = 10.100.1.1 # The first usable IP in public subnet (gateway)
 PRIVATE_SUBNET_IP = 10.100.2.2 # The internal IP for the server
 
@@ -28,7 +27,7 @@ PRIVATE_SUBNET_IP = 10.100.2.2 # The internal IP for the server
 VPC_B_NAME       = vpc-dev
 VPC_B_CIDR       = 10.200.0.0/16
 VPC_B_SUBNET     = 10.200.1.0/24
-VPC_B_GATEWAY    = 10.200.1.1 # This is the test ping target
+VPC_B_GATEWAY    = 10.200.1.1
 
 # CLI Command
 PYTHON_CMD     = ./vpcctl.py
